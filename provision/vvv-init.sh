@@ -25,9 +25,6 @@ noroot mkdir -p ${VVV_PATH_TO_SITE}/log
 noroot touch ${VVV_PATH_TO_SITE}/log/nginx-error.log
 noroot touch ${VVV_PATH_TO_SITE}/log/nginx-access.log
 
-echo "Copying the sites Nginx config template ( fork this site template to customise the template )"
-cp -f "${VVV_PATH_TO_SITE}/provision/vvv-nginx.conf.tmpl" "${VVV_PATH_TO_SITE}/provision/vvv-nginx.conf"
-
 if [ -n "$(type -t is_utility_installed)" ] && [ "$(type -t is_utility_installed)" = function ] && `is_utility_installed core tls-ca`; then
   echo "Inserting the SSL key locations into the sites Nginx config"
   VVV_CERT_DIR="/srv/certificates"
