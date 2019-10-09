@@ -1,6 +1,21 @@
 #!/usr/bin/env bash
 # Provision WordPress Stable
 
+VVV_CONFIG=/vagrant/vvv-config.yml
+if [[ -f /vagrant/vvv-custom.yml ]]; then
+  VVV_CONFIG=/vagrant/vvv-custom.yml
+fi
+
+get_host() {
+  local value=`cat ${VVV_CONFIG} | shyaml get-value sites.${1}.hosts.0 2> /dev/null`
+  echo ${value:-$@}
+}
+
+get_hosts() {
+  local value=`cat ${VVV_CONFIG} | shyaml get-values sites.${1}.hosts 2> /dev/null`
+  echo ${value:-$@}
+}
+
 echo " * Custom site template provisioner - downloads and installs a copy of WP stable for testing, building client sites, etc"
 
 # Make a database, if we don't already have one
@@ -15,20 +30,64 @@ noroot mkdir -p ${VVV_PATH_TO_SITE}/log
 noroot touch ${VVV_PATH_TO_SITE}/log/nginx-error.log
 noroot touch ${VVV_PATH_TO_SITE}/log/nginx-access.log
 
-if [ -n "$(type -t is_utility_installed)" ] && [ "$(type -t is_utility_installed)" = function ] && `is_utility_installed core tls-ca`; then
-  echo "Inserting the SSL key locations into the sites Nginx config"
-  VVV_CERT_DIR="${VVV_PATH_TO_SITE}/certificates"
-  # On VVV 2.x we don't have a /srv/certificates mount, so switch to /vagrant/certificates
-  codename=$(lsb_release --codename | cut -f2)
-  if [[ $codename == "trusty" ]]; then # VVV 2 uses Ubuntu 14 LTS trusty
-    VVV_CERT_DIR="/vagrant/certificates"
-  fi
-  sed -i "s#{{TLS_CERT}}#ssl_certificate ${VVV_CERT_DIR}/${VVV_SITE_NAME}/dev.crt;#" "${VVV_PATH_TO_SITE}/provision/vvv-nginx.conf"
-  sed -i "s#{{TLS_KEY}}#ssl_certificate_key ${VVV_CERT_DIR}/${VVV_SITE_NAME}/dev.key;#" "${VVV_PATH_TO_SITE}/provision/vvv-nginx.conf"
+echo "Creating SSL certification"
+VVV_CERT_DIR="${VVV_PATH_TO_SITE}/certificates"
+SSL_CRT="${VVV_CERT_DIR}/dev.crt"
+SSL_KEY="${VVV_CERT_DIR}/dev.key"
+
+if [ -f "${SSL_CRT}" ] && [ -f "${SSL_KEY}" ]; then
+  echo "SSL certification already exists"
 else
-    sed -i "s#{{TLS_CERT}}##" "${VVV_PATH_TO_SITE}/provision/vvv-nginx.conf"
-    sed -i "s#{{TLS_KEY}}##" "${VVV_PATH_TO_SITE}/provision/vvv-nginx.conf"
+  echo "Generating certificates for the ${VVV_SITE_NAME} hosts"
+  SITE_ESCAPED=`echo ${VVV_SITE_NAME} | sed 's/\./\\\\./g'`
+  COMMON_NAME=`get_host ${SITE_ESCAPED}`
+  HOSTS=`get_hosts ${SITE_ESCAPED}`
+  CERT_DIR="${VVV_CERT_DIR}"
+
+  cat << EOF > ${CERT_DIR}/openssl.conf
+authorityKeyIdentifier=keyid,issuer
+basicConstraints=CA:FALSE
+keyUsage = digitalSignature, nonRepudiation, keyEncipherment, dataEncipherment
+subjectAltName = @alt_names
+[alt_names]
+EOF
+
+  I=0
+  for DOMAIN in ${HOSTS}; do
+    ((I++))
+    echo DNS.${I} = ${DOMAIN} >> ${CERT_DIR}/openssl.conf
+    ((I++))
+    echo DNS.${I} = *.${DOMAIN} >> ${CERT_DIR}/openssl.conf
+  done
+
+  openssl genrsa \
+    -out ${CERT_DIR}/dev.key \
+    2048 &>/dev/null
+
+  openssl req \
+    -new \
+    -key ${CERT_DIR}/dev.key \
+    -out ${CERT_DIR}/dev.csr \
+    -subj "/CN=${COMMON_NAME}" &>/dev/null
+
+  openssl x509 \
+    -req \
+    -in ${CERT_DIR}/dev.csr \
+    -CA ${CA_DIR}/ca.crt \
+    -CAkey ${CA_DIR}/ca.key \
+    -CAcreateserial \
+    -out ${CERT_DIR}/dev.crt \
+    -days 3650 \
+    -sha256 \
+    -extfile ${CERT_DIR}/openssl.conf &>/dev/null
+
+  echo "Finished generating TLS certificates"
 fi
+
+echo "Inserting the SSL key locations into the sites Nginx config"
+
+sed -i "s#{{TLS_CERT}}#ssl_certificate ${VVV_CERT_DIR}/${VVV_SITE_NAME}/dev.crt;#" "${VVV_PATH_TO_SITE}/provision/vvv-nginx.conf"
+sed -i "s#{{TLS_KEY}}#ssl_certificate_key ${VVV_CERT_DIR}/${VVV_SITE_NAME}/dev.key;#" "${VVV_PATH_TO_SITE}/provision/vvv-nginx.conf"
 
 LIVE_URL=`get_config_value 'live_url' ''`
 if [ ! -z "$LIVE_URL" ]; then
