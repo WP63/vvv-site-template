@@ -1,7 +1,14 @@
 #!/usr/bin/env bash
 # Provision WordPress Stable
-
+# DOMAIN=`get_primary_host "${VVV_SITE_NAME}".test`
+# SITE_TITLE=`get_config_value 'site_title' "${DOMAIN}"`
+# WP_VERSION=`get_config_value 'wp_version' 'latest'`
+# WP_LOCALE=`get_config_value 'locale' 'en_US'`
+# WP_TYPE=`get_config_value 'wp_type' "single"`
+DB_NAME=`get_config_value 'db_name' "${VVV_SITE_NAME}"`
+DB_NAME=${DB_NAME//[\\\/\.\<\>\:\"\'\|\?\!\*]/}
 VVV_CONFIG=/vagrant/vvv-config.yml
+
 if [[ -f /vagrant/vvv-custom.yml ]]; then
   VVV_CONFIG=/vagrant/vvv-custom.yml
 fi
@@ -15,8 +22,6 @@ get_hosts() {
   local value=`cat ${VVV_CONFIG} | shyaml get-values sites.${1}.hosts 2> /dev/null`
   echo ${value:-$@}
 }
-
-echo " * Custom site template provisioner - downloads and installs a copy of WP stable for testing, building client sites, etc"
 
 # Make a database, if we don't already have one
 echo -e "\nCreating database '${DB_NAME}' (if it's not already there)"
@@ -32,8 +37,8 @@ noroot touch ${VVV_PATH_TO_SITE}/log/nginx-access.log
 
 echo "Creating SSL certification"
 VVV_CERT_DIR="${VVV_PATH_TO_SITE}/certificates"
-SSL_CRT="${VVV_CERT_DIR}/dev.crt"
-SSL_KEY="${VVV_CERT_DIR}/dev.key"
+SSL_CRT="${VVV_CERT_DIR}/${VVV_SITE_NAME}.crt"
+SSL_KEY="${VVV_CERT_DIR}/${VVV_SITE_NAME}.key"
 
 if [ -f "${SSL_CRT}" ] && [ -f "${SSL_KEY}" ]; then
   echo "SSL certification already exists"
@@ -43,6 +48,11 @@ else
   COMMON_NAME=`get_host ${SITE_ESCAPED}`
   HOSTS=`get_hosts ${SITE_ESCAPED}`
   CERT_DIR="${VVV_CERT_DIR}"
+  CA_DIR="/srv/certificates/ca"
+
+  if [[ $codename == "trusty" ]]; then # VVV 2 uses Ubuntu 14 LTS trusty
+    CA_DIR="/vagrant/certificates/ca"
+  fi
 
   cat << EOF > ${CERT_DIR}/openssl.conf
 authorityKeyIdentifier=keyid,issuer
@@ -61,22 +71,22 @@ EOF
   done
 
   openssl genrsa \
-    -out ${CERT_DIR}/dev.key \
+    -out ${CERT_DIR}/${VVV_SITE_NAME}.key \
     2048 &>/dev/null
 
   openssl req \
     -new \
-    -key ${CERT_DIR}/dev.key \
-    -out ${CERT_DIR}/dev.csr \
+    -key ${CERT_DIR}/${VVV_SITE_NAME}.key \
+    -out ${CERT_DIR}/${VVV_SITE_NAME}.csr \
     -subj "/CN=${COMMON_NAME}" &>/dev/null
 
   openssl x509 \
     -req \
-    -in ${CERT_DIR}/dev.csr \
+    -in ${CERT_DIR}/${VVV_SITE_NAME}.csr \
     -CA ${CA_DIR}/ca.crt \
     -CAkey ${CA_DIR}/ca.key \
     -CAcreateserial \
-    -out ${CERT_DIR}/dev.crt \
+    -out ${CERT_DIR}/${VVV_SITE_NAME}.crt \
     -days 3650 \
     -sha256 \
     -extfile ${CERT_DIR}/openssl.conf &>/dev/null
@@ -86,8 +96,8 @@ fi
 
 echo "Inserting the SSL key locations into the sites Nginx config"
 
-sed -i "s#{{TLS_CERT}}#ssl_certificate ${VVV_CERT_DIR}/${VVV_SITE_NAME}/dev.crt;#" "${VVV_PATH_TO_SITE}/provision/vvv-nginx.conf"
-sed -i "s#{{TLS_KEY}}#ssl_certificate_key ${VVV_CERT_DIR}/${VVV_SITE_NAME}/dev.key;#" "${VVV_PATH_TO_SITE}/provision/vvv-nginx.conf"
+sed -i "s#{{TLS_CERT}}#ssl_certificate ${VVV_CERT_DIR}/${VVV_SITE_NAME}.crt;#" "${VVV_PATH_TO_SITE}/provision/vvv-nginx.conf"
+sed -i "s#{{TLS_KEY}}#ssl_certificate_key ${VVV_CERT_DIR}/${VVV_SITE_NAME}.key;#" "${VVV_PATH_TO_SITE}/provision/vvv-nginx.conf"
 
 LIVE_URL=`get_config_value 'live_url' ''`
 if [ ! -z "$LIVE_URL" ]; then
